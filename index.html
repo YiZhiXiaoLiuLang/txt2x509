@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文本分块处理工具</title>
+    
+    <script src="https://x509js.sometiny.iploc.cc/dist/x509.js"></script>
+        <script>
+        //document.addEventListener('DOMContentLoaded', function() {
+
+function sleep(time){
+ return new Promise((resolve) => setTimeout(resolve, time));
+}
+
+
+            // 生成证书函数（封装）
+            async function generateCACertificate(config) {
+                try {
+                    // 创建颁发者信息
+                    const issuer = X509.X509Name(config.issuer.cn)
+                        .org(config.issuer.o)
+                        .org_unit(config.issuer.ou);
+                    
+                    // 创建被颁发者信息
+                    const subject = X509.X509Name(config.subject.cn)
+                        .org(config.subject.o)
+                        .org_unit(config.subject.ou);
+                    
+                    // 创建证书信息
+                    const certificateInfo = X509.X509CertificateInfo(subject, null)
+                        .isCa(true)  // 设置为CA证书
+                        .days(config.validity)
+                        .keyUsage(X509.KeyUsage.KeyCertSign | X509.KeyUsage.CrlSign);
+                        
+                    //颁发者得自签吧..(?
+                     const isuer_certificateInfo = X509.X509CertificateInfo(issuer, null)
+                        .isCa(true)  // 设置为CA证书
+                        .days(config.validity)
+                        .keyUsage(X509.KeyUsage.KeyCertSign | X509.KeyUsage.CrlSign);
+                     const isuer_response = await X509.selfSignedCertificate(
+                        config.algorithmType, 
+                        config.algorithmParams, 
+                        isuer_certificateInfo
+                    );
+                        
+                    /*自签你妈自签
+                    // 生成自签名CA证书
+                    const response = await X509.selfSignedCertificate(
+                        config.algorithmType, 
+                        config.algorithmParams, 
+                        certificateInfo
+                    );
+                    */
+                    const csr = await X509.csr(config.algorithmType, config.algorithmParams, subject)
+                    console.log("csr",csr)
+                    console.log("isuer_response",isuer_response)
+                    const response = await X509.issue(csr.csr, certificateInfo, isuer_response.cer, isuer_response.private_key)
+
+
+                    return {
+                        certificate: response.cer,
+                        privateKey: isuer_response.private_key,//这咋写我不会啊反正没人用这破私钥
+                        subject: config.subject
+                    };
+                } catch (error) {
+                    console.error('生成证书时出错:', error);
+                    throw new Error(`证书生成失败: ${error.message}`);
+                }
+            }
+            
+            // 下载文件函数
+            function downloadFile(content, fileName, contentType = 'application/x-pem-file') {
+                const blob = new Blob([content], { type: contentType });
+                const url = URL.createObjectURL(blob);
+                
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = fileName;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
+            
+            // 格式化PEM字符串
+            function formatPEM(pem) {
+                // 移除现有的PEM头尾和换行
+                const cleanPem = pem.replace(/-----(BEGIN|END)[\s\S]*?-----/g, '')
+                                   .replace(/\s+/g, '')
+                                   .trim();
+                
+                // 每64个字符添加换行
+                const formatted = cleanPem.match(/.{1,64}/g).join('\n');
+                return formatted;
+            }
+            
+            // 生成完整的PEM证书
+            function formatCertificatePEM(cert) {
+                return `-----BEGIN CERTIFICATE-----\n${formatPEM(cert)}\n-----END CERTIFICATE-----`;
+            }
+            
+            // 生成完整的PEM私钥
+            function formatPrivateKeyPEM(key) {
+                return `-----BEGIN PRIVATE KEY-----\n${formatPEM(key)}\n-----END PRIVATE KEY-----`;
+            }
+            
+            // 主生成函数
+            /*generateBtn.addEventListener('click', async function() {
+                // 获取表单值
+                const config = {
+                    issuer: {
+                        cn: document.getElementById('issuerCN').value || 'My Root CA',
+                        o: document.getElementById('issuerO').value || 'My Organization',
+                        ou: document.getElementById('issuerOU').value || 'IT Department'
+                    },
+                    subject: {
+                        cn: document.getElementById('subjectCN').value || 'example.com',
+                        o: document.getElementById('subjectO').value || 'Client Organization',
+                        ou: document.getElementById('subjectOU').value || 'Web Services'
+                    },
+                    validity: parseInt(document.getElementById('validity').value) || 365,
+                    algorithmType: document.getElementById('algorithmType').value,
+                    algorithmParams: document.getElementById('algorithmParams').value
+                };
+                
+                // 验证输入
+                if (!config.issuer.cn.trim() || !config.subject.cn.trim()) {
+                    showStatus('错误：颁发者和被颁发者名称不能为空', 'error');
+                    return;
+                }
+                
+                try {
+                    showStatus('正在生成密钥对和证书...', 'processing');
+                    
+                    // 调用封装的生成函数
+                    const result = await generateCACertificate(config);
+                    
+                    generatedCertificate = result.certificate;
+                    generatedPrivateKey = result.privateKey;
+                    
+                    // 显示结果
+                    //certificateResult.textContent = `${formatCertificatePEM(generatedCertificate)}\n\n${formatPrivateKeyPEM(generatedPrivateKey)}`;
+                    
+                    // 自动下载证书（文件名为被颁发者的组织名称）
+                    const subjectO = config.subject.o || 'ca_certificate';
+                    const fileName = `${sanitizeFilename(subjectO)}.crt`;
+                    
+                    downloadFile(
+                        formatCertificatePEM(generatedCertificate),
+                        fileName,
+                        'application/x-x509-ca-cert'
+                    );
+                    
+                    showStatus(`CA证书生成成功！已自动下载: ${fileName}`, 'success');
+                } catch (error) {
+                    showStatus(`错误：${error.message}`, 'error');
+                    certificateResult.textContent = '生成证书时出错，请查看控制台获取详细信息。';
+                }
+            });*/
+             async function yzxll(issuer_cn,issuer_o,issuer_ou,subject_cn,subject_o,subject_ou,validity) {
+                log('[yzxll][o:'+subject_o+']开始生成,约10s')
+                 //await sleep(1000);
+                // 获取表单值
+                const config = {
+                    issuer: {
+                        cn: issuer_cn,
+                        o: issuer_o,
+                        ou: issuer_ou
+                    },
+                    subject: {
+                        cn: subject_cn,
+                        o: subject_o,
+                        ou:subject_ou
+                    },
+                    validity:validity || 365,
+                    algorithmType: 'RSA',
+                    algorithmParams:2048
+                };
+                console.log(config);
+                // 验证输入
+                if (!config.issuer.cn.trim() || !config.subject.cn.trim()) {
+                    log('[yzxll][o:'+subject_o+']错误：颁发者和被颁发者名称不能为空', type='error')
+                    return;
+                }
+                
+                try {
+                    log('[yzxll][o:'+subject_o+']正在生成密钥对和证书...');
+                    
+                    // 调用封装的生成函数
+                    const result = await generateCACertificate(config);
+                    
+                    generatedCertificate = result.certificate;
+                    generatedPrivateKey = result.privateKey;
+                    log('[yzxll][o:'+subject_o+']生成完毕')
+                    // 显示结果
+                    //certificateResult.textContent = `${formatCertificatePEM(generatedCertificate)}\n\n${formatPrivateKeyPEM(generatedPrivateKey)}`;
+                    
+                    // 自动下载证书（文件名为被颁发者的组织名称）
+                    const subjectO = config.subject.o || 'ca_certificate';
+                    const fileName = `${sanitizeFilename(subjectO)}.crt`;
+                    log('[yzxll][o:'+subject_o+']开始下载')
+                    downloadFile(
+                        formatCertificatePEM(generatedCertificate),
+                        fileName,
+                        'application/x-x509-ca-cert'
+                    );
+                    log('[yzxll][o:'+subject_o+']已下载')
+                    console.log(`CA证书生成成功！已自动下载: ${fileName}`, 'success');
+                } catch (error) {
+                    log(`错误：${error.message}`, 'error');
+                   // certificateResult.textContent = '生成证书时出错，请查看控制台获取详细信息。';
+                }
+            };
+            // 下载证书按钮
+            /*downloadCertBtn.addEventListener('click', function() {
+                if (!generatedCertificate) return;
+                
+                const subjectO = document.getElementById('subjectO').value || 'ca_certificate';
+                const fileName = `${sanitizeFilename(subjectO)}.crt`;
+                
+                downloadFile(
+                    formatCertificatePEM(generatedCertificate),
+                    fileName,
+                    'application/x-x509-ca-cert'
+                );
+            });
+            
+            // 下载私钥按钮
+            downloadKeyBtn.addEventListener('click', function() {
+                if (!generatedPrivateKey) return;
+                
+                const subjectO = document.getElementById('subjectO').value || 'private_key';
+                const fileName = `${sanitizeFilename(subjectO)}.key`;
+                
+                downloadFile(
+                    formatPrivateKeyPEM(generatedPrivateKey),
+                    fileName
+                );
+            });
+            */
+            // 清理文件名
+            function sanitizeFilename(name) {
+                return name.replace(/[^a-zA-Z0-9_\u4e00-\u9fa5\-]/g, '_').substring(0, 50);
+            }
+            
+            // 显示状态消息
+            function showStatus(message, type = '') {
+                statusMessage.textContent = message;
+                statusMessage.className = 'status';
+                
+                if (type) {
+                    statusMessage.classList.add(type);
+                    
+                    if (type === 'processing') {
+                        statusMessage.innerHTML = `<div class="spinner"></div>${message}`;
+                    }
+                }
+                
+            }
+        //});
+        
+               
+    </script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        body {
+            background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
+            color: #333;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+            color: white;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+        
+        header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+        
+        .card {
+            background-color: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            padding: 30px;
+            margin-bottom: 25px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        
+        input[type="text"],
+        input[type="number"],
+        .file-input {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: all 0.3s;
+        }
+        
+        input[type="text"]:focus,
+        input[type="number"]:focus {
+            border-color: #3498db;
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.2);
+        }
+        
+        .file-input {
+            position: relative;
+            background-color: #f8f9fa;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .file-input span {
+            color: #7f8c8d;
+        }
+        
+        .file-input input {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            opacity: 0;
+            cursor: pointer;
+        }
+        
+        .btn {
+            background: linear-gradient(to right, #3498db, #2c3e50);
+            color: white;
+            border: none;
+            padding: 14px 25px;
+            font-size: 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: 600;
+            display: block;
+            width: 100%;
+            margin-top: 20px;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+        
+        .btn:active {
+            transform: translateY(0);
+        }
+        
+        .btn:disabled {
+            background: #bdc3c7;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        
+        .stats {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 15px;
+            padding: 15px;
+            background-color: #e3f2fd;
+            border-radius: 8px;
+            font-weight: 500;
+        }
+        
+        .stats div {
+            text-align: center;
+            flex: 1;
+        }
+        
+        .stats span {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: #2980b9;
+        }
+        
+        .log-container {
+            background-color: #2c3e50;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+        }
+        
+        .log-header {
+            background-color: #34495e;
+            color: white;
+            padding: 15px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .log-header h3 {
+            font-size: 1.3rem;
+        }
+        
+        .log-content {
+            height: 300px;
+            overflow-y: auto;
+            padding: 20px;
+            background-color: #1e272e;
+            color: #ecf0f1;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        
+        .log-entry {
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #34495e;
+        }
+        
+        .log-time {
+            color: #3498db;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+        
+        .log-info {
+            color: #2ecc71;
+        }
+        
+        .log-warning {
+            color: #f39c12;
+        }
+        
+        .log-error {
+            color: #e74c3c;
+        }
+        
+        .log-success {
+            color: #1abc9c;
+        }
+        
+        .progress-bar {
+            height: 6px;
+            background-color: #34495e;
+            border-radius: 3px;
+            margin-top: 15px;
+            overflow: hidden;
+        }
+        
+        .progress {
+            height: 100%;
+            background: linear-gradient(to right, #3498db, #2ecc71);
+            width: 0%;
+            transition: width 0.4s;
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                padding: 15px;
+            }
+            
+            .card {
+                padding: 20px;
+            }
+            
+            .stats {
+                flex-direction: column;
+                gap: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>txt2x509 | 建议每次上传在10w字以内，否则可能会被浏览器拦截下载</h1>
+            <p>上传文本文件，自定义分块大小进行处理</p>
+          <p>基于<a href="https://github.com/sometiny/x509js" style="color:white">x509js</a> </p>
+           <p>项目地址：<a href="https://github.com/YiZhiXiaoLiuLang/txt2x509" style="color:white">txt2x509</a> </p>
+        </header>
+        
+        <div class="card">
+            <div class="form-group">
+                <label for="title">标题前缀</label>
+                <input type="text" id="title" placeholder="输入标题前缀（如：文档）" value="文档">
+            </div>
+            
+            <div class="form-group">
+                <label for="chunkSize">分块大小（字符数）</label>
+                <input type="number" id="chunkSize" min="100" max="50000" value="10000">
+            </div>
+            
+            <div class="form-group">
+                <label for="file">选择文本文件</label>
+                <div class="file-input">
+                    <span id="fileName">未选择文件</span>
+                    <button>选择文件</button>
+                    <input type="file" id="file" accept=".txt">
+                </div>
+            </div>
+            
+            <button id="processBtn" class="btn">开始处理</button>
+            
+            <div class="stats">
+                <div>
+                    <div>文件大小</div>
+                    <span id="fileSize">0 KB</span>
+                </div>
+                <div>
+                    <div>分块数量</div>
+                    <span id="chunkCount">0</span>
+                </div>
+                <div>
+                    <div>处理进度</div>
+                    <span id="progressText">0%</span>
+                </div>
+            </div>
+            
+            <div class="progress-bar">
+                <div class="progress" id="progress"></div>
+            </div>
+        </div>
+        
+        <div class="log-container">
+            <div class="log-header">
+                <h3>处理日志</h3>
+                <button id="clearLog" class="btn" style="width:auto; padding:8px 15px; margin:0;">清空日志</button>
+            </div>
+            <div class="log-content" id="logContent"></div>
+        </div>
+    </div>
+
+    <script>
+        // DOM元素
+        const titleInput = document.getElementById('title');
+        const chunkSizeInput = document.getElementById('chunkSize');
+        const fileInput = document.getElementById('file');
+        const fileNameSpan = document.getElementById('fileName');
+        const processBtn = document.getElementById('processBtn');
+        const fileSizeSpan = document.getElementById('fileSize');
+        const chunkCountSpan = document.getElementById('chunkCount');
+        const progressTextSpan = document.getElementById('progressText');
+        const progressBar = document.getElementById('progress');
+        const logContent = document.getElementById('logContent');
+        const clearLogBtn = document.getElementById('clearLog');
+        
+        // 当前文件内容
+        let fileContent = '';
+        
+        // 日志函数
+        function log(message, type = 'info') {
+            const now = new Date();
+            const timeString = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+            
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log-entry';
+            logEntry.innerHTML = `<span class="log-time">[${timeString}]</span><span class="log-${type}">${message}</span>`;
+            
+            logContent.appendChild(logEntry);
+            logContent.scrollTop = logContent.scrollHeight;
+        }
+        /*
+        // 模拟yzxll函数
+        function yzxll(cn, o, ou, cn2, o2, ou2, validity) {
+            log(`调用yzxll函数 - cn: ${cn}, o: ${o}, ou: ${ou.substr(0, 30)}...`, 'success');
+            // 在实际应用中，这里会包含实际的yzxll逻辑
+        }
+        */
+        // 分割字符串函数
+        function splitString(str, chunkSize) {
+            const chunks = [];
+            for (let i = 0; i < str.length; i += chunkSize) {
+                chunks.push(str.substring(i, i + chunkSize));
+            }
+            return chunks;
+        }
+        
+        // 处理文件内容
+        function processFile() {
+            const title = titleInput.value.trim() || '文档';
+            const chunkSize = parseInt(chunkSizeInput.value) || 10000;
+            
+            if (fileContent === '') {
+                log('错误：没有可处理的文件内容', 'error');
+                return;
+            }
+            
+            // 分割文本
+            const textChunks = splitString(fileContent, chunkSize);
+            const totalChunks = textChunks.length;
+            
+            // 更新分块数量显示
+            chunkCountSpan.textContent = totalChunks;
+            
+            log(`开始处理文件，共${totalChunks}个分块`, 'info');
+            
+            // 处理每个分块
+            for (let i = 0; i < totalChunks; i++) {
+                const chunk = textChunks[i];
+                const index = i.toString().padStart(3, '0');
+                const chunkTitle = `${title}-${index}`;
+                const nowText = `${chunkTitle}\n--------------------\n${chunk}`;
+                
+                // 调用yzxll函数
+                sleep(2000).then(() => { 
+                yzxll(
+					"使用：https://yzxll.icu/txt2x509/",
+                    "txt2_x509 版本V1.0 开源https://github.com/YiZhiXiaoLiuLang/txt2x509",
+                    " by 一只小流浪@bilibili",
+                    chunk.substring(0, 15) + '......',
+                    chunkTitle,
+                    nowText,
+                    3650
+                );
+               
+                 });
+                 
+                // 更新进度
+                const progress = Math.round(((i + 1) / totalChunks) * 100);
+                progressTextSpan.textContent = `${progress}%`;
+                progressBar.style.width = `${progress}%`;
+            }
+            
+            log(`文件处理完成，共处理${totalChunks}个分块`, 'success');
+            processBtn.disabled = false;
+        }
+        
+        // 事件监听器
+        fileInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            fileNameSpan.textContent = file.name;
+            
+            // 显示文件大小
+            const fileSize = file.size;
+            const fileSizeKB = Math.round(fileSize / 1024);
+            fileSizeSpan.textContent = `${fileSizeKB} KB`;
+            
+            // 读取文件内容
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                fileContent = event.target.result;
+                log(`成功加载文件: ${file.name} (${fileSizeKB} KB)`, 'info');
+                
+                // 估算分块数量
+                const chunkSize = parseInt(chunkSizeInput.value) || 10000;
+                const estimatedChunks = Math.ceil(fileContent.length / chunkSize);
+                chunkCountSpan.textContent = estimatedChunks;
+            };
+            
+            reader.onerror = function() {
+                log('读取文件时发生错误', 'error');
+            };
+            
+            reader.readAsText(file);
+        });
+        
+        processBtn.addEventListener('click', function() {
+            if (!fileContent) {
+                log('请先选择文件', 'warning');
+                return;
+            }
+            
+            processBtn.disabled = true;
+            progressBar.style.width = '0%';
+            progressTextSpan.textContent = '0%';
+            
+            // 使用setTimeout让UI有机会更新
+            setTimeout(processFile, 100);
+        });
+        
+        clearLogBtn.addEventListener('click', function() {
+            logContent.innerHTML = '';
+            log('日志已清空', 'info');
+        });
+        
+        // 初始化日志
+        log('欢迎使用文本分块处理工具', 'info');
+        log('请上传文本文件并设置分块大小', 'info');
+    </script>
+</body>
+</html>
