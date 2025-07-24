@@ -7,8 +7,9 @@ txt转为x509（CA证书），用于在可以打开原生设置的学习机上�
 <img width="1424" height="799" alt="屏幕截图 2025-07-24 132648" src="https://github.com/user-attachments/assets/2fac19ab-e8ed-4d63-a049-f4e12592c4c0" />
 
 # How To Use?
-## js版-在线使用（基于x509js）
+## js版-在线使用（基于<a href="https://github.com/sometiny/x509js">x509js</a>）
 示例：<a href="https://yzxll.icu/txt2x509/">https://yzxll.icu/txt2x509/</a>
+
 或下载v1.html后打开
 
 ## python3版
